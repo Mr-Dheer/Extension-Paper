@@ -59,22 +59,23 @@ class A_llmrec_model(nn.Module):
         self.bce_criterion = torch.nn.BCEWithLogitsLoss()
         
         if args.pretrain_stage2 or args.inference:
-            self.llm = llm4rec(device=self.device, llm_model=args.llm)
+            self.llm = llm4rec(device=self.device)
+            llm_hidden_size = self.llm.llm_model.config.text_config.hidden_size
             
             self.log_emb_proj = nn.Sequential(
-                nn.Linear(self.rec_sys_dim, self.llm.llm_model.config.hidden_size),
-                nn.LayerNorm(self.llm.llm_model.config.hidden_size),
+                nn.Linear(self.rec_sys_dim, llm_hidden_size),
+                nn.LayerNorm(llm_hidden_size),
                 nn.LeakyReLU(),
-                nn.Linear(self.llm.llm_model.config.hidden_size, self.llm.llm_model.config.hidden_size)
+                nn.Linear(llm_hidden_size, llm_hidden_size)
             )
             nn.init.xavier_normal_(self.log_emb_proj[0].weight)
             nn.init.xavier_normal_(self.log_emb_proj[3].weight)
 
             self.item_emb_proj = nn.Sequential(
-                nn.Linear(128, self.llm.llm_model.config.hidden_size),
-                nn.LayerNorm(self.llm.llm_model.config.hidden_size),
+                nn.Linear(128, llm_hidden_size),
+                nn.LayerNorm(llm_hidden_size),
                 nn.GELU(),
-                nn.Linear(self.llm.llm_model.config.hidden_size, self.llm.llm_model.config.hidden_size)
+                nn.Linear(llm_hidden_size, llm_hidden_size)
             )
             nn.init.xavier_normal_(self.item_emb_proj[0].weight)
             nn.init.xavier_normal_(self.item_emb_proj[3].weight)
@@ -387,21 +388,34 @@ class A_llmrec_model(nn.Module):
                 attention_mask = llm_tokens.attention_mask
                 inputs_embeds = torch.cat([log_emb, inputs_embeds], dim=1)
                 attention_mask = torch.cat([atts_llm, llm_tokens.attention_mask], dim=1)
-                    
                 outputs = self.llm.llm_model.generate(
                     inputs_embeds=inputs_embeds,
                     attention_mask=attention_mask,
+                    max_new_tokens=256,     # ✅ Correct for inputs_embeds
+                    min_new_tokens=1,
                     do_sample=False,
-                    top_p=0.9,
-                    temperature=1,
                     num_beams=1,
-                    max_length=512,
-                    min_length=1,
-                    pad_token_id=self.llm.llm_tokenizer.eos_token_id,
+                    pad_token_id=self.llm.llm_tokenizer.pad_token_id,
+                    eos_token_id=self.llm.llm_tokenizer.eos_token_id,
                     repetition_penalty=1.5,
-                    length_penalty=1,
+                    length_penalty=1.0,
                     num_return_sequences=1,
                 )
+                    #! The code below is as the Author code 
+                # outputs = self.llm.llm_model.generate(
+                #     inputs_embeds=inputs_embeds,
+                #     attention_mask=attention_mask,
+                #     do_sample=False,
+                #     top_p=0.9,
+                #     temperature=1,
+                #     num_beams=1,
+                #     max_length=4036,
+                #     min_length=1,
+                #     pad_token_id=self.llm.llm_tokenizer.eos_token_id,
+                #     repetition_penalty=1.5,
+                #     length_penalty=1,
+                #     num_return_sequences=1,
+                # )
 
             outputs[outputs == 0] = 2 # convert output id 0 to 2 (eos_token_id)
             output_text = self.llm.llm_tokenizer.batch_decode(outputs, skip_special_tokens=True)
