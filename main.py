@@ -36,9 +36,9 @@ if __name__ == "__main__":
     parser.add_argument("--stage2_lr", type=float, default=0.0001)
 
     # Clip 
-    parser.add_argument('--clip_embeddings_path', type=str, 
-                    default='/home/kavach/Dev/Extension-Paper/A-LLMRec/data/amazon/All_Beauty_clip_combined_2018_50_50.npy',
-                    help='Path to pre-computed CLIP embeddings')
+    # parser.add_argument('--clip_embeddings_path', type=str, 
+    #                 default='/home/kavach/Dev/Extension-Paper/A-LLMRec/data/amazon/All_Beauty_clip_combined_2018_50_50.npy',
+    #                 help='Path to pre-computed CLIP embeddings')
     
     args = parser.parse_args()
     
