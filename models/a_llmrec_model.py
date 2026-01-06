@@ -8,14 +8,12 @@ import numpy as np
 
 from models.recsys_model import *
 from models.llm4rec import *
-from sentence_transformers import SentenceTransformer
-
 
 class two_layer_mlp(nn.Module):
-    def __init__(self, dims):
+    def __init__(self, dims, hidden_dim=128):
         super().__init__()
-        self.fc1 = nn.Linear(dims, 128)
-        self.fc2 = nn.Linear(128, dims)
+        self.fc1 = nn.Linear(dims, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, dims)
         self.sigmoid = nn.Sigmoid()
         
     def forward(self, x):
@@ -23,6 +21,7 @@ class two_layer_mlp(nn.Module):
         x = self.sigmoid(x)
         x1 = self.fc2(x)
         return x, x1
+
 
 class A_llmrec_model(nn.Module):
     def __init__(self, args):
@@ -37,12 +36,27 @@ class A_llmrec_model(nn.Module):
         self.recsys = RecSys(args.recsys, rec_pre_trained_data, self.device)
         self.item_num = self.recsys.item_num
         self.rec_sys_dim = self.recsys.hidden_units
-        self.sbert_dim = 768
         
         self.mlp = two_layer_mlp(self.rec_sys_dim)
+        
+        # ============================================
+        # CLIP INTEGRATION - HARDCODED PATH
+        # ============================================
         if args.pretrain_stage1:
-            self.sbert = SentenceTransformer('nq-distilbert-base-v1')
-            self.mlp2 = two_layer_mlp(self.sbert_dim)
+            # Hardcoded CLIP embedding path
+            CLIP_FUSED_PATH = '/home/kavach/Dev/Extension-Paper/Clip/ALIGNED_ALLM_PATCHED/clip_fused_aligned.npy'
+            
+            print(f"Loading CLIP embeddings from: {CLIP_FUSED_PATH}")
+            clip_fused = np.load(CLIP_FUSED_PATH)
+            self.clip_embeddings = torch.tensor(clip_fused, dtype=torch.float32)
+            self.clip_dim = clip_fused.shape[1]
+            
+            print(f"✓ Loaded CLIP embeddings: {self.clip_embeddings.shape}")
+            print(f"  - Items: {self.clip_embeddings.shape[0]} (including padding)")
+            print(f"  - Dimension: {self.clip_dim}")
+            
+            # Initialize MLP2 with CLIP dimension (auto-detected)
+            self.mlp2 = two_layer_mlp(self.clip_dim)
         
         self.mse = nn.MSELoss()
         
@@ -78,13 +92,37 @@ class A_llmrec_model(nn.Module):
             )
             nn.init.xavier_normal_(self.item_emb_proj[0].weight)
             nn.init.xavier_normal_(self.item_emb_proj[3].weight)
-            
+    
+    # ============================================
+    # NEW METHOD: Get CLIP embeddings
+    # ============================================
+    def get_clip_embeddings(self, item_ids):
+        """
+        Get CLIP embeddings for given item IDs.
+        
+        Args:
+            item_ids: array-like of item IDs [batch_size]
+        
+        Returns:
+            CLIP embeddings: [batch_size, clip_dim]
+        """
+        # Convert to tensor if needed
+        if isinstance(item_ids, np.ndarray):
+            item_ids = torch.from_numpy(item_ids).long()
+        elif isinstance(item_ids, list):
+            item_ids = torch.tensor(item_ids, dtype=torch.long)
+        
+        # Direct lookup (already aligned to SASRec item IDs!)
+        clip_emb = self.clip_embeddings[item_ids].to(self.device)
+        
+        return clip_emb
+    
     def save_model(self, args, epoch1=None, epoch2=None):
         out_dir = f'./models/saved_models/'
         create_dir(out_dir)
         out_dir += f'{args.rec_pre_trained_data}_{args.recsys}_{epoch1}_'
         if args.pretrain_stage1:
-            torch.save(self.sbert.state_dict(), out_dir + 'sbert.pt')
+            # CLIP embeddings loaded from file - no need to save
             torch.save(self.mlp.state_dict(), out_dir + 'mlp.pt')
             torch.save(self.mlp2.state_dict(), out_dir + 'mlp2.pt') 
         
@@ -155,7 +193,6 @@ class A_llmrec_model(nn.Module):
     def pre_train_phase1(self,data,optimizer, batch_iter):
         epoch, total_epoch, step, total_step = batch_iter
         
-        self.sbert.train()
         optimizer.zero_grad()
 
         u, seq, pos, neg = data
@@ -177,8 +214,8 @@ class A_llmrec_model(nn.Module):
         bpr_loss = 0
         gt_loss = 0
         rc_loss = 0
-        text_rc_loss = 0
-        original_loss = 0
+        clip_rc_loss = 0
+        
         while start_inx < len(log_emb_):
             log_emb = log_emb_[start_inx:end_inx]
             pos_emb = pos_emb_[start_inx:end_inx]
@@ -191,13 +228,11 @@ class A_llmrec_model(nn.Module):
             end_inx += 60
             iterss +=1
             
-            pos_text = self.find_item_text(pos__)
-            neg_text = self.find_item_text(neg__)
-            
-            pos_token = self.sbert.tokenize(pos_text)
-            pos_text_embedding= self.sbert({'input_ids':pos_token['input_ids'].to(self.device),'attention_mask':pos_token['attention_mask'].to(self.device)})['sentence_embedding']
-            neg_token = self.sbert.tokenize(neg_text)
-            neg_text_embedding= self.sbert({'input_ids':neg_token['input_ids'].to(self.device),'attention_mask':neg_token['attention_mask'].to(self.device)})['sentence_embedding']
+            # ============================================
+            # USE CLIP EMBEDDINGS (instead of SBERT)
+            # ============================================
+            pos_text_embedding = self.get_clip_embeddings(pos__)
+            neg_text_embedding = self.get_clip_embeddings(neg__)
             
             pos_text_matching, pos_proj = self.mlp(pos_emb)
             neg_text_matching, neg_proj = self.mlp(neg_emb)
@@ -223,9 +258,9 @@ class A_llmrec_model(nn.Module):
             bpr_loss += loss.item()
             gt_loss += matching_loss.item()
             rc_loss += reconstruction_loss.item()
-            text_rc_loss += text_reconstruction_loss.item()
+            clip_rc_loss += text_reconstruction_loss.item()
             
-        print("loss in epoch {}/{} iteration {}/{}: {} / BPR loss: {} / Matching loss: {} / Item reconstruction: {} / Text reconstruction: {}".format(epoch, total_epoch, step, total_step, mean_loss/iterss, bpr_loss/iterss, gt_loss/iterss, rc_loss/iterss, text_rc_loss/iterss))
+        print("loss in epoch {}/{} iteration {}/{}: {} / BPR loss: {} / Matching loss: {} / Item reconstruction: {} / CLIP reconstruction: {}".format(epoch, total_epoch, step, total_step, mean_loss/iterss, bpr_loss/iterss, gt_loss/iterss, rc_loss/iterss, clip_rc_loss/iterss))
     
     def make_interact_text(self, interact_ids, interact_max_num):
         interact_item_titles_ = self.find_item_text(interact_ids, title_flag=True, description_flag=False)
@@ -293,7 +328,7 @@ class A_llmrec_model(nn.Module):
                 input_text += 'This user has watched '
             elif self.args.rec_pre_trained_data == 'Video_Games':
                 input_text += 'This user has played '
-            elif self.args.rec_pre_trained_data == 'Luxury_Beauty' or self.args.rec_pre_trained_data == 'Toys_and_Games':
+            elif self.args.rec_pre_trained_data == 'Luxury_Beauty' or self.args.rec_pre_trained_data == 'Toys_and_Games' or 'All_Beauty' in self.args.rec_pre_trained_data:
                 input_text += 'This user has bought '
                 
             input_text += interact_text
@@ -302,7 +337,7 @@ class A_llmrec_model(nn.Module):
                 input_text +=' in the previous. Recommend one next movie for this user to watch next from the following movie title set, '
             elif self.args.rec_pre_trained_data == 'Video_Games':
                 input_text +=' in the previous. Recommend one next game for this user to play next from the following game title set, '            
-            elif self.args.rec_pre_trained_data == 'Luxury_Beauty' or self.args.rec_pre_trained_data == 'Toys_and_Games':
+            elif self.args.rec_pre_trained_data == 'Luxury_Beauty' or self.args.rec_pre_trained_data == 'Toys_and_Games' or 'All_Beauty' in self.args.rec_pre_trained_data:
                 input_text +=' in the previous. Recommend one next item for this user to buy next from the following item title set, '
                     
             input_text += candidate_text
@@ -345,7 +380,7 @@ class A_llmrec_model(nn.Module):
                     input_text += 'This user has watched '
                 elif self.args.rec_pre_trained_data == 'Video_Games':
                     input_text += 'This user has played '
-                elif self.args.rec_pre_trained_data == 'Luxury_Beauty' or self.args.rec_pre_trained_data == 'Toys_and_Games':
+                elif self.args.rec_pre_trained_data == 'Luxury_Beauty' or self.args.rec_pre_trained_data == 'Toys_and_Games' or 'All_Beauty' in self.args.rec_pre_trained_data:
                     input_text += 'This user has bought '
                     
                 input_text += interact_text
@@ -354,7 +389,7 @@ class A_llmrec_model(nn.Module):
                     input_text +=' in the previous. Recommend one next movie for this user to watch next from the following movie title set, '
                 elif self.args.rec_pre_trained_data == 'Video_Games':
                     input_text +=' in the previous. Recommend one next game for this user to play next from the following game title set, '            
-                elif self.args.rec_pre_trained_data == 'Luxury_Beauty' or self.args.rec_pre_trained_data == 'Toys_and_Games':
+                elif self.args.rec_pre_trained_data == 'Luxury_Beauty' or self.args.rec_pre_trained_data == 'Toys_and_Games' or 'All_Beauty' in self.args.rec_pre_trained_data:
                     input_text +=' in the previous. Recommend one next item for this user to buy next from the following item title set, '
                 
                 input_text += candidate_text
@@ -395,7 +430,7 @@ class A_llmrec_model(nn.Module):
                     top_p=0.9,
                     temperature=1,
                     num_beams=1,
-                    max_length=512,
+                    max_length=4096,
                     min_length=1,
                     pad_token_id=self.llm.llm_tokenizer.eos_token_id,
                     repetition_penalty=1.5,
@@ -408,7 +443,7 @@ class A_llmrec_model(nn.Module):
             output_text = [text.strip() for text in output_text]
 
         for i in range(len(text_input)):
-            f = open(f'./recommendation_output.txt','a')
+            f = open(f'./recommendation_output_otp_CLIP_69.txt','a')
             f.write(text_input[i])
             f.write('\n\n')
             
