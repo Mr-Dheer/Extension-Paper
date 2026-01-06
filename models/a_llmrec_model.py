@@ -59,7 +59,8 @@ class A_llmrec_model(nn.Module):
         self.rec_sys_dim = self.recsys.hidden_units  # 50
         
         # === CLIP CONFIG (changed from SBERT) ===
-        self.clip_dim = 512  # Changed from sbert_dim = 768
+        # Put the correct emb size over here
+        self.clip_dim = 1536  # Changed from sbert_dim = 768
         self.latent_dim = 128
         
         # MLP for CF embeddings: 50 -> 128 -> 50
@@ -67,7 +68,7 @@ class A_llmrec_model(nn.Module):
         
         if args.pretrain_stage1:
             # === LOAD PRE-COMPUTED CLIP EMBEDDINGS ===
-            clip_path = './data/amazon/All_Beauty_clip_50_50_2018_aligned.npy'
+            clip_path = '/home/kavach/Dev/Extension-Paper/Clip/ALIGNED_ALLM_PATCHED/clip_fused_aligned.npy'
             
             clip_emb_np = np.load(clip_path)
             self.register_buffer('clip_embeddings', 
@@ -498,7 +499,7 @@ class A_llmrec_model(nn.Module):
             output_text = [text.strip() for text in output_text]
 
         for i in range(len(text_input)):
-            f = open(f'./recommendation_output.txt', 'a')
+            f = open(f'./recommendation_output_smol_clip_69.txt', 'a')
             f.write(text_input[i])
             f.write('\n\n')
             f.write('Answer: ' + answer[i])
