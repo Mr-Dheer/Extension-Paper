@@ -1,25 +1,47 @@
+# llm4rec.py
+# SmolVLM2-2.2B-Instruct integration for A-LLMRec with CLIP embeddings
+# Fixed version with proper dtype handling for flash attention
+
 import torch
 import torch.nn as nn
 from transformers import AutoProcessor, AutoModelForImageTextToText
 
+
 class llm4rec(nn.Module):
+    """
+    SmolVLM2 wrapper for recommendation task.
+    
+    SmolVLM2 Architecture (from paper):
+    - Vision Encoder: SigLIP-SO400M (400M params)
+    - Language Model: SmolLM2-1.7B 
+    - Total: 2.2B parameters
+    - Hidden size: 2048
+    - Context length: 16k tokens
+    """
+    
     def __init__(
         self,
         device,
+        model_path="HuggingFaceTB/SmolVLM2-2.2B-Instruct",
         max_output_txt_len=256,
     ):
         super().__init__()
         self.device = device
+        self.max_output_txt_len = max_output_txt_len
+        self.model_path = model_path
         
-        # Load SmolVLM2 model and processor
-        model_path = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
-        
-        print(f"Loading SmolVLM2 from {model_path}...")
+        print("\n" + "="*70)
+        print("INITIALIZING SmolVLM2 FOR RECOMMENDATION")
+        print("="*70)
+        print(f"[SmolVLM2] Model: {model_path}")
+        print(f"[SmolVLM2] Device: {device}")
         
         # Load processor
+        print("[SmolVLM2] Loading processor...")
         self.processor = AutoProcessor.from_pretrained(model_path)
         
-        # Load model without quantization
+        # Load model with bfloat16
+        print("[SmolVLM2] Loading model (this may take a moment)...")
         self.llm_model = AutoModelForImageTextToText.from_pretrained(
             model_path,
             torch_dtype=torch.bfloat16,
@@ -27,71 +49,108 @@ class llm4rec(nn.Module):
             _attn_implementation="flash_attention_2"
         )
         
+        # Store the model dtype for consistency
+        self.model_dtype = torch.bfloat16
+        
+        # Enable memory-efficient training
         self.llm_model.gradient_checkpointing_enable()
         self.llm_model.config.use_cache = False
         
-        # Access the underlying tokenizer
+        # Get tokenizer
         self.llm_tokenizer = self.processor.tokenizer
         
-        print(f"Original vocab size: {len(self.llm_tokenizer)}")
+        print(f"[SmolVLM2] Tokenizer vocab size: {len(self.llm_tokenizer)}")
+        print(f"[SmolVLM2] BOS token: {self.llm_tokenizer.bos_token} (ID: {self.llm_tokenizer.bos_token_id})")
+        print(f"[SmolVLM2] EOS token: {self.llm_tokenizer.eos_token} (ID: {self.llm_tokenizer.eos_token_id})")
+        print(f"[SmolVLM2] PAD token: {self.llm_tokenizer.pad_token} (ID: {self.llm_tokenizer.pad_token_id})")
         
-        # Add special tokens for recommendation task
-        special_tokens_dict = {
-            'additional_special_tokens': ['[UserRep]', '[HistoryEmb]', '[CandidateEmb]']
-        }
+        # Add custom tokens for recommendation
+        self.rec_special_tokens = ['[UserRep]', '[HistoryEmb]', '[CandidateEmb]']
         
-        num_added_tokens = self.llm_tokenizer.add_special_tokens(special_tokens_dict)
-        print(f"Added {num_added_tokens} special tokens")
+        existing_tokens = set(self.llm_tokenizer.get_vocab().keys())
+        tokens_to_add = [t for t in self.rec_special_tokens if t not in existing_tokens]
         
-        # Resize token embeddings if new tokens were added
-        if num_added_tokens > 0:
+        if tokens_to_add:
+            num_added = self.llm_tokenizer.add_special_tokens({
+                'additional_special_tokens': tokens_to_add
+            })
+            print(f"[SmolVLM2] Added {num_added} recommendation tokens: {tokens_to_add}")
             self.llm_model.resize_token_embeddings(len(self.llm_tokenizer))
-            print(f"New vocab size: {len(self.llm_tokenizer)}")
+            print(f"[SmolVLM2] Resized embeddings to: {len(self.llm_tokenizer)}")
+        else:
+            print(f"[SmolVLM2] Recommendation tokens already exist")
         
-        # Freeze base model parameters
-        for name, param in self.llm_model.named_parameters():
-            param.requires_grad = False
-        
-        self.max_output_txt_len = max_output_txt_len
-        
-        # Store special token IDs for efficient lookup
+        # Store special token IDs
         self.userrep_token_id = self.llm_tokenizer.convert_tokens_to_ids("[UserRep]")
         self.history_token_id = self.llm_tokenizer.convert_tokens_to_ids("[HistoryEmb]")
         self.candidate_token_id = self.llm_tokenizer.convert_tokens_to_ids("[CandidateEmb]")
         
-        print(f"Special token IDs - UserRep: {self.userrep_token_id}, "
-              f"HistoryEmb: {self.history_token_id}, CandidateEmb: {self.candidate_token_id}")
+        print(f"[SmolVLM2] Recommendation token IDs:")
+        print(f"          [UserRep]: {self.userrep_token_id}")
+        print(f"          [HistoryEmb]: {self.history_token_id}")
+        print(f"          [CandidateEmb]: {self.candidate_token_id}")
         
-        print("SmolVLM2 loaded successfully!")
+        # Verify tokens are not UNK
+        unk_id = self.llm_tokenizer.unk_token_id
+        if any(tid == unk_id for tid in [self.userrep_token_id, self.history_token_id, self.candidate_token_id]):
+            print("[SmolVLM2] WARNING: Some recommendation tokens mapped to UNK!")
+        
+        # Freeze base model
+        for name, param in self.llm_model.named_parameters():
+            param.requires_grad = False
+        print("[SmolVLM2] Froze all model parameters")
+        
+        # Get hidden size
+        self.hidden_size = self._get_hidden_size()
+        print(f"[SmolVLM2] Hidden size: {self.hidden_size}")
+        
+        print("[SmolVLM2] Initialization complete!")
+        print("="*70 + "\n")
 
-    def tokenize_text_simple(self, text_list):
-        """
-        Simple tokenization without chat template - used for custom prompts
-        """
-        # Tokenize directly without chat template
+    def _get_hidden_size(self):
+        """Extract hidden size from SmolVLM2 config"""
+        config = self.llm_model.config
+        
+        if hasattr(config, 'text_config') and hasattr(config.text_config, 'hidden_size'):
+            return config.text_config.hidden_size
+        if hasattr(config, 'hidden_size'):
+            return config.hidden_size
+        
+        emb = self.llm_model.get_input_embeddings()
+        if hasattr(emb, 'embedding_dim'):
+            return emb.embedding_dim
+        
+        print("[SmolVLM2] WARNING: Could not determine hidden size, using default 2048")
+        return 2048
+
+    def tokenize_text(self, text_list, add_special_tokens=True, max_length=2048):
+        """Tokenize text for SmolVLM2"""
+        self.llm_tokenizer.padding_side = "right"
+        
         tokens = self.llm_tokenizer(
             text_list,
             return_tensors="pt",
             padding="longest",
             truncation=True,
-            add_special_tokens=True  # Add BOS/EOS
+            max_length=max_length,
+            add_special_tokens=add_special_tokens
         ).to(self.device)
         
         return tokens
 
     def concat_text_input_output(self, input_ids, input_atts, output_ids, output_atts):
-        """Concatenate input and output sequences for teacher forcing"""
+        """Concatenate input and output for teacher-forcing training"""
         input_part_targets_len = []
         llm_tokens = {"input_ids": [], "attention_mask": []}
         
         for i in range(input_ids.size(0)):
-            this_input_ones = input_atts[i].sum()
-            input_part_targets_len.append(this_input_ones)
+            this_input_ones = input_atts[i].sum().item()
+            input_part_targets_len.append(int(this_input_ones))
             
             llm_tokens['input_ids'].append(
                 torch.cat([
                     input_ids[i][:this_input_ones],
-                    output_ids[i][1:],  # Skip BOS token from output
+                    output_ids[i][1:],
                     input_ids[i][this_input_ones:]
                 ])
             )
@@ -105,93 +164,85 @@ class llm4rec(nn.Module):
         
         llm_tokens['input_ids'] = torch.stack(llm_tokens['input_ids'])
         llm_tokens['attention_mask'] = torch.stack(llm_tokens['attention_mask'])
+        
         return llm_tokens, input_part_targets_len
 
-    def replace_hist_candi_token(self, llm_tokens, inputs_embeds, interact_embs, candidate_embs):
+    def replace_special_tokens(self, llm_tokens, inputs_embeds, user_reps=None, 
+                                interact_embs=None, candidate_embs=None):
         """
-        Replace history and candidate special tokens with item embeddings.
-        This method is called from generate() in a_llmrec_model.py
+        Replace recommendation special tokens with actual embeddings.
         
-        Args:
-            llm_tokens: Dict with 'input_ids' and 'attention_mask'
-            inputs_embeds: Token embeddings tensor [batch_size, seq_len, hidden_dim]
-            interact_embs: List of interaction history embeddings for each batch item
-            candidate_embs: List of candidate item embeddings for each batch item
-        
-        Returns:
-            llm_tokens: Unchanged token dict
-            inputs_embeds: Updated embeddings with special tokens replaced
+        IMPORTANT: All embeddings must be in bfloat16 for flash attention compatibility!
         """
-        batch_size = len(llm_tokens["input_ids"])
+        batch_size = inputs_embeds.size(0)
+        target_dtype = inputs_embeds.dtype  # Should be bfloat16
         
         for idx in range(batch_size):
-            # Replace [HistoryEmb] tokens with interaction embeddings
-            if interact_embs is not None and len(interact_embs[idx]) > 0:
-                hist_positions = (llm_tokens["input_ids"][idx] == self.history_token_id).nonzero(as_tuple=False).view(-1)
-                for pos, item_emb in zip(hist_positions, interact_embs[idx]):
-                    inputs_embeds[idx][pos] = item_emb
+            input_ids = llm_tokens["input_ids"][idx]
             
-            # Replace [CandidateEmb] tokens with candidate embeddings
-            if candidate_embs is not None and len(candidate_embs[idx]) > 0:
-                cand_positions = (llm_tokens["input_ids"][idx] == self.candidate_token_id).nonzero(as_tuple=False).view(-1)
-                for pos, item_emb in zip(cand_positions, candidate_embs[idx]):
-                    inputs_embeds[idx][pos] = item_emb
+            # Replace [UserRep] token
+            if user_reps is not None:
+                userrep_positions = (input_ids == self.userrep_token_id).nonzero(as_tuple=False).view(-1)
+                if len(userrep_positions) > 0:
+                    # Ensure dtype matches
+                    user_emb = user_reps[idx].to(dtype=target_dtype)
+                    inputs_embeds[idx, userrep_positions[0]] = user_emb
+            
+            # Replace [HistoryEmb] tokens
+            if interact_embs is not None and idx < len(interact_embs):
+                hist_embs = interact_embs[idx]
+                if hist_embs is not None and len(hist_embs) > 0:
+                    hist_positions = (input_ids == self.history_token_id).nonzero(as_tuple=False).view(-1)
+                    num_replace = min(len(hist_positions), len(hist_embs))
+                    for pos_idx in range(num_replace):
+                        # Ensure dtype matches
+                        emb = hist_embs[pos_idx].to(dtype=target_dtype)
+                        inputs_embeds[idx, hist_positions[pos_idx]] = emb
+            
+            # Replace [CandidateEmb] tokens
+            if candidate_embs is not None and idx < len(candidate_embs):
+                cand_embs = candidate_embs[idx]
+                if cand_embs is not None and len(cand_embs) > 0:
+                    cand_positions = (input_ids == self.candidate_token_id).nonzero(as_tuple=False).view(-1)
+                    num_replace = min(len(cand_positions), len(cand_embs))
+                    for pos_idx in range(num_replace):
+                        # Ensure dtype matches
+                        emb = cand_embs[pos_idx].to(dtype=target_dtype)
+                        inputs_embeds[idx, cand_positions[pos_idx]] = emb
         
-        return llm_tokens, inputs_embeds
+        return inputs_embeds
 
-    def replace_special_tokens(self, llm_tokens, inputs_embeds, user_reps, interact_embs, candidate_embs):
-        """
-        Replace ALL special tokens with actual embeddings.
-        This method is used during training (forward pass).
-        
-        Args:
-            llm_tokens: Dict with 'input_ids' and 'attention_mask'
-            inputs_embeds: Token embeddings tensor
-            user_reps: User representation embeddings [batch_size, hidden_dim]
-            interact_embs: List of interaction history embeddings
-            candidate_embs: List of candidate item embeddings
-        """
-        batch_size = len(llm_tokens["input_ids"])
-        
-        for idx in range(batch_size):
-            # Replace [UserRep] with user representation
-            userrep_positions = (llm_tokens["input_ids"][idx] == self.userrep_token_id).nonzero(as_tuple=False).view(-1)
-            if len(userrep_positions) > 0 and user_reps is not None:
-                inputs_embeds[idx][userrep_positions[0]] = user_reps[idx]
-            
-            # Replace [HistoryEmb] tokens with interaction embeddings
-            if interact_embs is not None and len(interact_embs[idx]) > 0:
-                hist_positions = (llm_tokens["input_ids"][idx] == self.history_token_id).nonzero(as_tuple=False).view(-1)
-                for pos, item_emb in zip(hist_positions, interact_embs[idx]):
-                    inputs_embeds[idx][pos] = item_emb
-            
-            # Replace [CandidateEmb] tokens with candidate embeddings
-            if candidate_embs is not None and len(candidate_embs[idx]) > 0:
-                cand_positions = (llm_tokens["input_ids"][idx] == self.candidate_token_id).nonzero(as_tuple=False).view(-1)
-                for pos, item_emb in zip(cand_positions, candidate_embs[idx]):
-                    inputs_embeds[idx][pos] = item_emb
-        
-        return llm_tokens, inputs_embeds
-    
+    def replace_hist_candi_token(self, llm_tokens, inputs_embeds, interact_embs, candidate_embs):
+        """Backward compatibility wrapper"""
+        return llm_tokens, self.replace_special_tokens(
+            llm_tokens, inputs_embeds, 
+            user_reps=None, 
+            interact_embs=interact_embs, 
+            candidate_embs=candidate_embs
+        )
+
     def forward(self, log_emb, samples):
         """
-        Forward pass for recommendation task
+        Training forward pass.
         
         Args:
-            log_emb: User representation embeddings [batch_size, hidden_dim]
-            samples: Dict containing:
-                - text_input: List of input prompts (with special tokens)
-                - text_output: List of target outputs
-                - interact: List of interaction history embeddings
-                - candidate: List of candidate item embeddings
-        """
-        # Create attention mask for user representation
-        atts_llm = torch.ones(log_emb.size()[:-1], dtype=torch.long).to(self.device)
-        atts_llm = atts_llm.unsqueeze(1)  # [batch_size, 1]
+            log_emb: User representation [batch, hidden_size] - should be in bfloat16
+            samples: Dict with text_input, text_output, interact, candidate
         
-        # Tokenize output (targets) - simple tokenization
+        Returns:
+            loss: Scalar loss value
+        """
+        batch_size = log_emb.size(0)
+        
+        # Ensure log_emb is bfloat16
+        log_emb = log_emb.to(dtype=self.model_dtype)
+        
+        # Create attention for prepended user representation
+        atts_llm = torch.ones((batch_size, 1), dtype=torch.long, device=self.device)
+        
+        # Tokenize outputs with EOS
         text_output_with_eos = [t + self.llm_tokenizer.eos_token for t in samples['text_output']]
-        text_output_tokens = self.llm_tokenizer(
+        output_tokens = self.llm_tokenizer(
             text_output_with_eos,
             return_tensors="pt",
             padding="longest",
@@ -200,55 +251,46 @@ class llm4rec(nn.Module):
             add_special_tokens=False
         ).to(self.device)
         
-        # Tokenize input (prompts) - simple tokenization
-        text_input_tokens = self.tokenize_text_simple(samples['text_input'])
+        # Tokenize inputs
+        input_tokens = self.tokenize_text(samples['text_input'], add_special_tokens=True)
         
-        # Concatenate input and output for teacher forcing
+        # Concatenate for teacher forcing
         llm_tokens, input_part_targets_len = self.concat_text_input_output(
-            text_input_tokens['input_ids'],
-            text_input_tokens['attention_mask'],
-            text_output_tokens['input_ids'],
-            text_output_tokens['attention_mask'],
+            input_tokens['input_ids'],
+            input_tokens['attention_mask'],
+            output_tokens['input_ids'],
+            output_tokens['attention_mask'],
         )
         
-        # Create targets (mask input part, only compute loss on output)
-        targets = llm_tokens['input_ids'].masked_fill(
-            llm_tokens['input_ids'] == self.llm_tokenizer.pad_token_id, 
-            -100
-        )
+        # Create targets
+        targets = llm_tokens['input_ids'].clone()
+        targets[llm_tokens['input_ids'] == self.llm_tokenizer.pad_token_id] = -100
         
         for i, l in enumerate(input_part_targets_len):
-            targets[i][:l] = -100  # Don't compute loss on input tokens
+            targets[i, :l] = -100
         
-        # Create empty targets for user representation
-        empty_targets = (
-            torch.ones(atts_llm.size(), dtype=torch.long)
-            .to(self.device)
-            .fill_(-100)
-        )
-        
-        # Concatenate user rep targets with text targets
+        empty_targets = torch.full((batch_size, 1), -100, dtype=torch.long, device=self.device)
         targets = torch.cat([empty_targets, targets], dim=1)
         
-        # Get text embeddings from the model
+        # Get token embeddings (will be in bfloat16)
         inputs_embeds = self.llm_model.get_input_embeddings()(llm_tokens['input_ids'])
         
-        # Replace special tokens with actual embeddings
-        llm_tokens, inputs_embeds = self.replace_special_tokens(
-            llm_tokens, 
+        # Replace special tokens - embeddings will be cast to bfloat16 inside
+        inputs_embeds = self.replace_special_tokens(
+            llm_tokens,
             inputs_embeds,
-            log_emb,  # user representations
-            samples['interact'],  # history embeddings
-            samples['candidate']  # candidate embeddings
+            user_reps=log_emb,
+            interact_embs=samples.get('interact'),
+            candidate_embs=samples.get('candidate')
         )
         
-        # Prepend user representation embedding
-        log_emb = log_emb.unsqueeze(1)  # [batch_size, 1, hidden_dim]
-        inputs_embeds = torch.cat([log_emb, inputs_embeds], dim=1)
+        # Prepend user representation (ensure bfloat16)
+        log_emb_expanded = log_emb.unsqueeze(1).to(dtype=inputs_embeds.dtype)
+        inputs_embeds = torch.cat([log_emb_expanded, inputs_embeds], dim=1)
         attention_mask = torch.cat([atts_llm, llm_tokens['attention_mask']], dim=1)
         
-        # Forward pass through model
-        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+        # Forward pass
+        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             outputs = self.llm_model(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
@@ -256,54 +298,97 @@ class llm4rec(nn.Module):
                 labels=targets,
             )
         
-        loss = outputs.loss
-        return loss
-    
+        return outputs.loss
+
     @torch.no_grad()
     def generate(self, log_emb, samples, max_new_tokens=64):
         """
-        Generate predictions for recommendation
+        Generate recommendations.
         
-        Args:
-            log_emb: User representation embeddings
-            samples: Dict with text_input, interact, candidate
-            max_new_tokens: Maximum tokens to generate
+        CRITICAL: All tensors must be bfloat16 for flash attention!
         """
-        atts_llm = torch.ones(log_emb.size()[:-1], dtype=torch.long).to(self.device)
-        atts_llm = atts_llm.unsqueeze(1)
+        batch_size = log_emb.size(0)
         
-        # Tokenize input
-        text_input_tokens = self.tokenize_text_simple(samples['text_input'])
+        # === ENSURE BFLOAT16 FOR FLASH ATTENTION ===
+        log_emb = log_emb.to(dtype=self.model_dtype)
         
-        inputs_embeds = self.llm_model.get_input_embeddings()(text_input_tokens['input_ids'])
+        # Attention for user rep
+        atts_llm = torch.ones((batch_size, 1), dtype=torch.long, device=self.device)
         
-        # Replace special tokens
-        _, inputs_embeds = self.replace_special_tokens(
-            text_input_tokens,
+        # Tokenize input with left padding for generation
+        self.llm_tokenizer.padding_side = "left"
+        input_tokens = self.llm_tokenizer(
+            samples['text_input'],
+            return_tensors="pt",
+            padding="longest",
+            truncation=True,
+            max_length=2048,
+            add_special_tokens=True
+        ).to(self.device)
+        
+        # Get embeddings (already in bfloat16 from model)
+        inputs_embeds = self.llm_model.get_input_embeddings()(input_tokens['input_ids'])
+        
+        # Convert interact and candidate embeddings to bfloat16
+        if samples.get('interact') is not None:
+            interact_embs = []
+            for embs in samples['interact']:
+                if embs is not None:
+                    interact_embs.append(embs.to(dtype=self.model_dtype))
+                else:
+                    interact_embs.append(None)
+        else:
+            interact_embs = None
+            
+        if samples.get('candidate') is not None:
+            candidate_embs = []
+            for embs in samples['candidate']:
+                if embs is not None:
+                    candidate_embs.append(embs.to(dtype=self.model_dtype))
+                else:
+                    candidate_embs.append(None)
+        else:
+            candidate_embs = None
+        
+        # Replace special tokens (will ensure bfloat16)
+        inputs_embeds = self.replace_special_tokens(
+            input_tokens,
             inputs_embeds,
-            log_emb,
-            samples['interact'],
-            samples['candidate']
+            user_reps=log_emb,
+            interact_embs=interact_embs,
+            candidate_embs=candidate_embs
         )
         
-        # Prepend user representation
-        log_emb = log_emb.unsqueeze(1)
-        inputs_embeds = torch.cat([log_emb, inputs_embeds], dim=1)
-        attention_mask = torch.cat([atts_llm, text_input_tokens['attention_mask']], dim=1)
+        # Prepend user rep (ensure bfloat16)
+        log_emb_expanded = log_emb.unsqueeze(1).to(dtype=inputs_embeds.dtype)
+        inputs_embeds = torch.cat([log_emb_expanded, inputs_embeds], dim=1)
+        attention_mask = torch.cat([atts_llm, input_tokens['attention_mask']], dim=1)
+        
+        # === ENSURE ALL TENSORS ARE BFLOAT16 ===
+        inputs_embeds = inputs_embeds.to(dtype=self.model_dtype)
+        
+        # Disable cache for generation (important for flash attention)
+        self.llm_model.config.use_cache = True  # Need cache for generation
         
         # Generate
-        outputs = self.llm_model.generate(
-            inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            pad_token_id=self.llm_tokenizer.pad_token_id,
-            eos_token_id=self.llm_tokenizer.eos_token_id,
-        )
+        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+            outputs = self.llm_model.generate(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                num_beams=1,
+                pad_token_id=self.llm_tokenizer.pad_token_id,
+                eos_token_id=self.llm_tokenizer.eos_token_id,
+                repetition_penalty=1.5,
+                use_cache=True,  # Enable for generation
+            )
         
-        generated_texts = self.processor.batch_decode(
-            outputs,
-            skip_special_tokens=True
-        )
+        # Reset cache setting
+        self.llm_model.config.use_cache = False
+        
+        # Decode
+        generated_texts = self.llm_tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        generated_texts = [text.strip() for text in generated_texts]
         
         return generated_texts
