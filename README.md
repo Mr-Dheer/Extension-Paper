@@ -48,6 +48,6 @@ To run with multi-GPU setting, assign devices using the CUDA_VISIBLE_DEVICES com
 Inference stage generates "recommendation_output.txt" file and writes the recommendation result generated from the LLMs into the file. To evaluate the result, run the eval.py file.
 
 ```
-python main.py --inference --rec_pre_trained_data Movies_and_TV
+python main.py --inference --rec_pre_trained_data Movies_and_TV -seed 1
 python eval.py
 ```
