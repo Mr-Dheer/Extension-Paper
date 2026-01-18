@@ -625,7 +625,7 @@ class A_llmrec_model(nn.Module):
         outputs = self.llm.generate(log_emb_proj, samples, max_new_tokens=64)
         
         # Log results
-        out_file = './recommendation_output_smolvlm2_clip_lion_G.txt'
+        out_file = './recommendation_output_smolvlm2_clip_lion_G_seed_1.txt'
         with open(out_file, 'a') as f:
             for i in range(batch_size):
                 f.write("="*60 + "\n")
