@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from transformers import AutoTokenizer, OPTForCausalLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 class llm4rec(nn.Module):
     def __init__(
@@ -13,39 +13,48 @@ class llm4rec(nn.Module):
         super().__init__()
         self.device = device
 
+        # CHANGED: Use bfloat16 to match Mistral's native dtype
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,  # Match your input dtype
+            bnb_4bit_compute_dtype=torch.bfloat16,  # Changed from float16
             bnb_4bit_use_double_quant=True,
             bnb_4bit_quant_type="nf4"
-)
+        )
         
-        if llm_model == 'opt':
-            self.llm_model = OPTForCausalLM.from_pretrained(
-                "facebook/opt-6.7b", 
-                quantization_config=bnb_config, 
-                torch_dtype=torch.float16, 
-                # load_in_4bit=True,
-                use_safetensors=True,
-                  device_map=self.device)
-            self.llm_tokenizer = AutoTokenizer.from_pretrained("facebook/opt-6.7b", use_fast=False)
-            # self.llm_model = OPTForCausalLM.from_pretrained("facebook/opt-6.7b", torch_dtype=torch.float16, device_map=self.device)
+        if llm_model == 'mistral':
+            self.llm_model = AutoModelForCausalLM.from_pretrained(
+                "mistralai/Mistral-7B-v0.3", 
+                quantization_config=bnb_config,
+                torch_dtype=torch.bfloat16,  # Changed from float16
+                device_map=self.device,
+            )
+            self.llm_tokenizer = AutoTokenizer.from_pretrained(
+                "mistralai/Mistral-7B-v0.3", 
+                use_fast=True
+            )
+            
+            # Mistral native tokens: bos="<s>" (id=1), eos="</s>" (id=2), unk="<unk>" (id=0)
+            # Only pad_token is missing, so we set it
+            if self.llm_tokenizer.pad_token is None:
+                self.llm_tokenizer.pad_token = self.llm_tokenizer.eos_token
+                self.llm_tokenizer.pad_token_id = self.llm_tokenizer.eos_token_id
         else:
             raise Exception(f'{llm_model} is not supported')
-            
-        self.llm_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-        self.llm_tokenizer.add_special_tokens({'bos_token': '</s>'})
-        self.llm_tokenizer.add_special_tokens({'eos_token': '</s>'})
-        self.llm_tokenizer.add_special_tokens({'unk_token': '</s>'})
-        self.llm_tokenizer.add_special_tokens({'additional_special_tokens': ['[UserRep]','[HistoryEmb]','[CandidateEmb]']})
+        
+        # Add custom tokens for A-LLMRec
+        self.llm_tokenizer.add_special_tokens({
+            'additional_special_tokens': ['[UserRep]', '[HistoryEmb]', '[CandidateEmb]']
+        })
 
         self.llm_model.resize_token_embeddings(len(self.llm_tokenizer))
         
+        # Freeze LLM (as per A-LLMRec paper)
         for _, param in self.llm_model.named_parameters():
             param.requires_grad = False
             
         self.max_output_txt_len = max_output_txt_len
 
+    # Rest of the methods stay exactly the same...
     def concat_text_input_output(self, input_ids, input_atts, output_ids, output_atts):
         input_part_targets_len = []
         llm_tokens = {"input_ids": [], "attention_mask": []}

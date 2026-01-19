@@ -15,7 +15,7 @@ if __name__ == "__main__":
     parser.add_argument('--gpu_num', type=int, default=0)
     
     # model setting
-    parser.add_argument("--llm", type=str, default='opt', help='flan_t5, opt, vicuna')
+    parser.add_argument("--llm", type=str, default='mistral', help='flan_t5, opt, vicuna')
     parser.add_argument("--recsys", type=str, default='sasrec')
     
     # dataset setting
@@ -25,6 +25,12 @@ if __name__ == "__main__":
     parser.add_argument("--pretrain_stage1", action='store_true')
     parser.add_argument("--pretrain_stage2", action='store_true')
     parser.add_argument("--inference", action='store_true')
+    
+    
+    # Inference setting 
+    parser.add_argument("--seed", type=int, default=None, 
+                    help='Random seed for reproducible negative sampling')
+
     
     # hyperparameters options
     parser.add_argument('--batch_size1', default=32, type=int)
