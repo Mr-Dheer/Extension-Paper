@@ -100,7 +100,7 @@ class A_llmrec_model(nn.Module):
         
         # === DIMENSION CONFIGURATION ===
         # self.clip_dim = 1536      # CLIP fused (768 text + 768 image)
-        self.clip_dim = 2048      # CLIP fused (768 text + 768 image)
+        self.clip_dim = 2560      # CLIP fused (768 text + 768 image)
         self.latent_dim = 128     # Shared latent space
         self.llm_hidden_size = 2048  # SmolVLM2-2.2B hidden size
         
@@ -143,7 +143,7 @@ class A_llmrec_model(nn.Module):
     def _load_clip_embeddings(self, args):
         """Load precomputed CLIP embeddings"""
         clip_path = getattr(args, 'clip_emb_path', 
-            '/home/kavach/Dev/Extension-Paper/Clip/ALIGNED_ALLM_PATCHED/clip_fused_aligned_lion_huge.npy')
+            '/home/kavach/Dev/Extension-Paper/Clip/ALIGNED_ALLM_PATCHED/clip_fused_aligned_bigger_G.npy')
         
         print(f"[CLIP] Loading from: {clip_path}")
         
@@ -625,7 +625,7 @@ class A_llmrec_model(nn.Module):
         outputs = self.llm.generate(log_emb_proj, samples, max_new_tokens=64)
         
         # Log results
-        out_file = './recommendation_output_smolvlm2_clip_lion_G_seed_1.txt'
+        out_file = './recommendation_output_smolvlm2_clip_lion_G_seed_700.txt'
         with open(out_file, 'a') as f:
             for i in range(batch_size):
                 f.write("="*60 + "\n")
