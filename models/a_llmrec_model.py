@@ -430,7 +430,7 @@ class A_llmrec_model(nn.Module):
                     top_p=0.9,
                     temperature=1,
                     num_beams=1,
-                    max_length=4096,
+                    max_length=256,
                     min_length=1,
                     pad_token_id=self.llm.llm_tokenizer.eos_token_id,
                     repetition_penalty=1.5,
