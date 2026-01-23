@@ -430,7 +430,7 @@ class A_llmrec_model(nn.Module):
                     top_p=0.9,
                     temperature=1,
                     num_beams=1,
-                    max_length=256,
+                    max_length=1024,
                     min_length=1,
                     pad_token_id=self.llm.llm_tokenizer.eos_token_id,
                     repetition_penalty=1.5,
@@ -443,7 +443,7 @@ class A_llmrec_model(nn.Module):
             output_text = [text.strip() for text in output_text]
 
         for i in range(len(text_input)):
-            output_file = f'./recommendation_output_mistral_CLIP_{getattr(self.args, "seed", "default")}.txt'
+            output_file = f'./recommendation_output_mistral_CLIP_{getattr(self.args, "seed", "default_2")}.txt'
             f = open(output_file, 'a')
 
             f.write(text_input[i])
