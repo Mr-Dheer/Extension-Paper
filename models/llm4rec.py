@@ -16,9 +16,10 @@ class llm4rec(nn.Module):
         # CHANGED: Use bfloat16 to match Mistral's native dtype
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,  # Changed from float16
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4"
+            # llm_int8_threshold=6.0
+            # bnb_4bit_compute_dtype=torch.bfloat16,  # Changed from float16
+            # bnb_4bit_use_double_quant=True,
+            # bnb_4bit_quant_type="nf4"
         )
         
         if llm_model == 'mistral':
