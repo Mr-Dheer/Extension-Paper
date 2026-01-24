@@ -105,7 +105,7 @@ def evaluate(answers, preds, fuzzy_threshold=None):
     return results
 
 if __name__ == "__main__":
-    path = "/home/kavach/Dev/Extension-Paper/A-LLMRec/recommendation_output_smolvlm2_clip_lion_G_seed_1.txt"
+    path = "/home/kavach/Dev/Extension-Paper/A-LLMRec/recommendation_output_ORIGINAL_LUX_BEAUTY_69.txt"
     answers, preds = get_answers_predictions(path)
 
     print(f"Loaded answers={len(answers)} preds={len(preds)}")
