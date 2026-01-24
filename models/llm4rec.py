@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from transformers import AutoTokenizer, OPTForCausalLM
+from transformers import AutoTokenizer, OPTForCausalLM, BitsAndBytesConfig
 
 class llm4rec(nn.Module):
     def __init__(
@@ -12,9 +12,22 @@ class llm4rec(nn.Module):
     ):
         super().__init__()
         self.device = device
+
+        bnb_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+            # bnb_4bit_compute_dtype=torch.float16,  # Match your input dtype
+            # bnb_4bit_use_double_quant=True,
+            # bnb_4bit_quant_type="nf4"
+)
         
         if llm_model == 'opt':
-            self.llm_model = OPTForCausalLM.from_pretrained("facebook/opt-6.7b", torch_dtype=torch.float16, load_in_8bit=True, device_map=self.device)
+            self.llm_model = OPTForCausalLM.from_pretrained(
+                "facebook/opt-6.7b", 
+                quantization_config=bnb_config, 
+                torch_dtype=torch.float16, 
+                # load_in_4bit=True,
+                use_safetensors=True,
+                  device_map=self.device)
             self.llm_tokenizer = AutoTokenizer.from_pretrained("facebook/opt-6.7b", use_fast=False)
             # self.llm_model = OPTForCausalLM.from_pretrained("facebook/opt-6.7b", torch_dtype=torch.float16, device_map=self.device)
         else:
