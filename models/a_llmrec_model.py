@@ -44,7 +44,7 @@ class A_llmrec_model(nn.Module):
         # ============================================
         if args.pretrain_stage1:
             # Hardcoded CLIP embedding path
-            CLIP_FUSED_PATH = '/home/kavach/Dev/Extension-Paper/Clip/ALIGNED_ALLM_PATCHED/clip_fused_aligned.npy'
+            CLIP_FUSED_PATH = '/home/kavach/Dev/Extension-Paper/Clip/ALIGNED_ALLM_FULL/clip_fused_aligned_Lux_beauty.npy'
             
             print(f"Loading CLIP embeddings from: {CLIP_FUSED_PATH}")
             clip_fused = np.load(CLIP_FUSED_PATH)
@@ -430,7 +430,7 @@ class A_llmrec_model(nn.Module):
                     top_p=0.9,
                     temperature=1,
                     num_beams=1,
-                    max_length=4096,
+                    max_length=1024,
                     min_length=1,
                     pad_token_id=self.llm.llm_tokenizer.eos_token_id,
                     repetition_penalty=1.5,
@@ -443,8 +443,9 @@ class A_llmrec_model(nn.Module):
             output_text = [text.strip() for text in output_text]
 
         for i in range(len(text_input)):
-            f = open(f'./recommendation_output_otp_CLIP_69.txt','a')
-            f.write(text_input[i])
+            f = open(f'./recommendation_output_ORIGNIAL_LUX_BEAUTY_CLIP_69_seed_2','a')
+            # f.write(text_input[i])
+            f.write('---------------------------------------------------------------')
             f.write('\n\n')
             
             f.write('Answer: '+ answer[i])

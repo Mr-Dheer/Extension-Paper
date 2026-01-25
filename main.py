@@ -25,11 +25,15 @@ if __name__ == "__main__":
     parser.add_argument("--pretrain_stage1", action='store_true')
     parser.add_argument("--pretrain_stage2", action='store_true')
     parser.add_argument("--inference", action='store_true')
+
+    # Inference setting 
+    parser.add_argument("--seed", type=int, default=None, 
+                    help='Random seed for reproducible negative sampling')
     
     # hyperparameters options
     parser.add_argument('--batch_size1', default=32, type=int)
     parser.add_argument('--batch_size2', default=1, type=int)
-    parser.add_argument('--batch_size_infer', default=2, type=int)
+    parser.add_argument('--batch_size_infer', default=8, type=int)
     parser.add_argument('--maxlen', default=50, type=int)
     parser.add_argument('--num_epochs', default=10, type=int)
     parser.add_argument("--stage1_lr", type=float, default=0.0001)

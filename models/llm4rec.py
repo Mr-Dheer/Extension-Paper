@@ -14,10 +14,10 @@ class llm4rec(nn.Module):
         self.device = device
 
         bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,  # Match your input dtype
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4"
+            load_in_8bit=True,
+            # bnb_4bit_compute_dtype=torch.float16,  # Match your input dtype
+            # bnb_4bit_use_double_quant=True,
+            # bnb_4bit_quant_type="nf4"
 )
         
         if llm_model == 'opt':
