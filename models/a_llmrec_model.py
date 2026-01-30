@@ -443,7 +443,7 @@ class A_llmrec_model(nn.Module):
             output_text = [text.strip() for text in output_text]
 
         for i in range(len(text_input)):
-            f = open(f'./recommendation_output_ORIGNIAL_LUX_BEAUTY_CLIP_69_seed_2','a')
+            f = open(f'./recommendation_output_ORIGNIAL_LUX_BEAUTY_CLIP_69_seed_3','a')
             # f.write(text_input[i])
             f.write('---------------------------------------------------------------')
             f.write('\n\n')
